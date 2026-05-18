@@ -120,7 +120,7 @@ const server = http.createServer(async (req, res) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   try {
     await ensureReady();
-    proxy.web(req, res, { target: config.laravelUrl });
+    proxy.web(req, res, { target: config.laravelUrl, xfwd: true });
   } catch (err) {
     console.error('[proxy] wake failed:', err.message);
     res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -132,7 +132,7 @@ const server = http.createServer(async (req, res) => {
 server.on('upgrade', async (req, socket, head) => {
   try {
     await ensureReady();
-    proxy.ws(req, socket, head, { target: config.laravelUrl });
+    proxy.ws(req, socket, head, { target: config.laravelUrl, xfwd: true });
   } catch (err) {
     socket.destroy();
   }
