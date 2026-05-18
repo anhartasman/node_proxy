@@ -109,6 +109,19 @@ async function ensureReady() {
 // ── Proxy ─────────────────────────────────────────────────────────────────────
 const proxy = httpProxy.createProxyServer({ changeOrigin: true });
 
+// Override X-Forwarded-* headers so Laravel builds URLs using the proxy's public origin.
+// xfwd:true would otherwise set proto=http and port=80 (Railway's internal port).
+proxy.on('proxyReq', (proxyReq) => {
+  if (config.proxyUrl) {
+    const url = new URL(config.proxyUrl);
+    const proto = url.protocol.replace(':', '');
+    const port  = url.port || (proto === 'https' ? '443' : '80');
+    proxyReq.setHeader('x-forwarded-proto', proto);
+    proxyReq.setHeader('x-forwarded-host',  url.hostname);
+    proxyReq.setHeader('x-forwarded-port',  port);
+  }
+});
+
 // Rewrite any Location header that points to the Laravel internal URL
 // so the browser follows the redirect back through the proxy, not directly to Laravel.
 proxy.on('proxyRes', (proxyRes) => {
