@@ -6,8 +6,8 @@ const httpProxy = require('http-proxy');
 const config = {
   mysqlHost: process.env.MYSQL_HOST,
   mysqlPort: parseInt(process.env.MYSQL_PORT || '3306'),
-  laravelUrl: process.env.LARAVEL_URL,
-  laravelHealthPath: process.env.LARAVEL_HEALTH_PATH || '/',
+  targetUrl: process.env.TARGET_URL,
+  healthPath: process.env.HEALTH_PATH || '/',
   proxyUrl: process.env.PROXY_URL,
   port: parseInt(process.env.PORT || '3000'),
   wakeTimeoutMs: parseInt(process.env.WAKE_TIMEOUT_MS || '60000'),
@@ -17,7 +17,7 @@ const config = {
 
 // ── sanity check ─────────────────────────────────────────────────────────────
 if (!config.mysqlHost) throw new Error('MYSQL_HOST is required');
-if (!config.laravelUrl) throw new Error('LARAVEL_URL is required');
+if (!config.targetUrl) throw new Error('TARGET_URL is required');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -48,7 +48,7 @@ async function waitForMySQL() {
   throw new Error(`MySQL did not wake within ${config.wakeTimeoutMs}ms`);
 }
 
-// ── HTTP probe (wakes Railway Laravel) ───────────────────────────────────────
+// ── HTTP probe (wakes target app) ────────────────────────────────────────────
 function probeHTTP(url) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
@@ -62,21 +62,21 @@ function probeHTTP(url) {
   });
 }
 
-async function waitForLaravel() {
-  const healthUrl = config.laravelUrl.replace(/\/$/, '') + config.laravelHealthPath;
+async function waitForTarget() {
+  const healthUrl = config.targetUrl.replace(/\/$/, '') + config.healthPath;
   const deadline = Date.now() + config.wakeTimeoutMs;
   let attempt = 0;
   while (Date.now() < deadline) {
     try {
       await probeHTTP(healthUrl);
-      console.log(`[laravel] up after ${++attempt} attempt(s)`);
+      console.log(`[app] up after ${++attempt} attempt(s)`);
       return;
     } catch {
       attempt++;
       await sleep(config.retryIntervalMs);
     }
   }
-  throw new Error(`Laravel did not wake within ${config.wakeTimeoutMs}ms`);
+  throw new Error(`App did not wake within ${config.wakeTimeoutMs}ms`);
 }
 
 // ── Wake sequencer with deduplication ────────────────────────────────────────
@@ -93,8 +93,8 @@ async function ensureReady() {
       console.log('[proxy] waking MySQL …');
       await waitForMySQL();
 
-      console.log('[proxy] waking Laravel …');
-      await waitForLaravel();
+      console.log('[proxy] waking app …');
+      await waitForTarget();
 
       lastWarmAt = Date.now();
       console.log('[proxy] both services ready');
@@ -109,7 +109,7 @@ async function ensureReady() {
 // ── Proxy ─────────────────────────────────────────────────────────────────────
 const proxy = httpProxy.createProxyServer({ changeOrigin: true });
 
-// Override X-Forwarded-* headers so Laravel builds URLs using the proxy's public origin.
+// Override X-Forwarded-* headers so the app builds URLs using the proxy's public origin.
 // xfwd:true would otherwise set proto=http and port=80 (Railway's internal port).
 proxy.on('proxyReq', (proxyReq) => {
   if (config.proxyUrl) {
@@ -122,13 +122,13 @@ proxy.on('proxyReq', (proxyReq) => {
   }
 });
 
-// Rewrite any Location header that points to the Laravel internal URL
-// so the browser follows the redirect back through the proxy, not directly to Laravel.
+// Rewrite any Location header pointing to the internal target URL
+// so the browser follows redirects back through the proxy.
 proxy.on('proxyRes', (proxyRes) => {
   const location = proxyRes.headers['location'];
   if (location && config.proxyUrl) {
-    const laravelOrigin = config.laravelUrl.replace(/\/$/, '');
-    proxyRes.headers['location'] = location.replace(laravelOrigin, config.proxyUrl);
+    const targetOrigin = config.targetUrl.replace(/\/$/, '');
+    proxyRes.headers['location'] = location.replace(targetOrigin, config.proxyUrl);
   }
 });
 
@@ -144,7 +144,7 @@ const server = http.createServer(async (req, res) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   try {
     await ensureReady();
-    proxy.web(req, res, { target: config.laravelUrl, xfwd: true });
+    proxy.web(req, res, { target: config.targetUrl, xfwd: true });
   } catch (err) {
     console.error('[proxy] wake failed:', err.message);
     res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -152,11 +152,11 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// Forward WebSocket upgrades too (needed if you use Laravel Reverb / Echo)
+// Forward WebSocket upgrades too (needed for Next.js HMR, Laravel Reverb, etc.)
 server.on('upgrade', async (req, socket, head) => {
   try {
     await ensureReady();
-    proxy.ws(req, socket, head, { target: config.laravelUrl, xfwd: true });
+    proxy.ws(req, socket, head, { target: config.targetUrl, xfwd: true });
   } catch (err) {
     socket.destroy();
   }
@@ -164,6 +164,6 @@ server.on('upgrade', async (req, socket, head) => {
 
 server.listen(config.port, () => {
   console.log(`[proxy] listening on :${config.port}`);
-  console.log(`[proxy] MySQL  → ${config.mysqlHost}:${config.mysqlPort}`);
-  console.log(`[proxy] Laravel → ${config.laravelUrl}`);
+  console.log(`[proxy] MySQL → ${config.mysqlHost}:${config.mysqlPort}`);
+  console.log(`[proxy] app   → ${config.targetUrl}`);
 });
