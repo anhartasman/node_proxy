@@ -8,6 +8,7 @@ const config = {
   mysqlPort: parseInt(process.env.MYSQL_PORT || '3306'),
   laravelUrl: process.env.LARAVEL_URL,
   laravelHealthPath: process.env.LARAVEL_HEALTH_PATH || '/',
+  proxyUrl: process.env.PROXY_URL,
   port: parseInt(process.env.PORT || '3000'),
   wakeTimeoutMs: parseInt(process.env.WAKE_TIMEOUT_MS || '60000'),
   retryIntervalMs: parseInt(process.env.RETRY_INTERVAL_MS || '2000'),
@@ -107,6 +108,16 @@ async function ensureReady() {
 
 // ── Proxy ─────────────────────────────────────────────────────────────────────
 const proxy = httpProxy.createProxyServer({ changeOrigin: true });
+
+// Rewrite any Location header that points to the Laravel internal URL
+// so the browser follows the redirect back through the proxy, not directly to Laravel.
+proxy.on('proxyRes', (proxyRes) => {
+  const location = proxyRes.headers['location'];
+  if (location && config.proxyUrl) {
+    const laravelOrigin = config.laravelUrl.replace(/\/$/, '');
+    proxyRes.headers['location'] = location.replace(laravelOrigin, config.proxyUrl);
+  }
+});
 
 proxy.on('error', (err, _req, res) => {
   console.error('[proxy] error:', err.message);
