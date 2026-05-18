@@ -1,0 +1,13 @@
+{
+  "name": "node-proxy",
+  "version": "1.0.0",
+  "description": "Sequenced wake-up proxy: MySQL → Laravel",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  }
+}
